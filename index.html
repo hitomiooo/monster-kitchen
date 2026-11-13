@@ -299,7 +299,7 @@ const THEMES={
 const SHIFT_SEC=120, GACHA_COST=300, BRANCH_RATE=120, IDLE_CAP_H=8;
 
 /* ================= セーブ ================= */
-function freshSave(){return{v:2,name:'',xp:0,money:0,sp:0,spBought:0,skills:{},house:0,items:[],unlocked:1,stars:[0,0,0,0],best:[0,0,0,0],branches:0,lastCollect:Date.now(),mons:{momo:1},mon:'momo',daily:{last:'',streak:0},shifts:0,theme:'yume',freeG:1,sorry1:0,ts:0};}
+function freshSave(){return{v:2,name:'',xp:0,money:0,sp:0,spBought:0,skills:{},house:0,items:[],unlocked:1,stars:[0,0,0,0],best:[0,0,0,0],branches:0,lastCollect:Date.now(),mons:{momo:1},mon:'momo',daily:{last:'',streak:0},shifts:0,theme:'yume',freeG:1,sorry1:0,tcode:'',ts:0};}
 function normalize(o){const f=freshSave();if(!o||typeof o!=='object')return f;try{o=JSON.parse(JSON.stringify(o));}catch(e){return f;}for(const k in f){if(o[k]!==undefined&&o[k]!==null)f[k]=o[k];}
  if(!Array.isArray(f.items))f.items=[];if(!f.mons||typeof f.mons!=='object'||Array.isArray(f.mons))f.mons={momo:1};for(const k in f.mons)if(!MONS.some(m=>m.id===k))delete f.mons[k];if(!Object.keys(f.mons).length)f.mons={momo:1};if(!f.mons[f.mon])f.mon=Object.keys(f.mons)[0];if(!o.v||o.v<2){f.theme='yume';f.v=2;}if(!Array.isArray(f.stars))f.stars=[0,0,0,0];if(!Array.isArray(f.best))f.best=[0,0,0,0];
  if(typeof f.skills!=='object')f.skills={};if(typeof f.daily!=='object')f.daily={last:'',streak:0};f.name=String(f.name||'').slice(0,10);return f;}
@@ -311,7 +311,7 @@ let cloudReady=false,bakDoc=null,cloudBest=null;
 function keepBackup(){try{const b=JSON.parse(localStorage.getItem('kc_bak')||'null');if(better(S,b))localStorage.setItem('kc_bak',JSON.stringify(S));}catch(e){}}
 function save(){S.ts=Date.now();try{localStorage.setItem('kc_save',JSON.stringify(S));}catch(e){}keepBackup();dirty=true;flush();}
 async function flush(){if(!saveDoc||!cloudReady||saving||!dirty||cloudDead)return;saving=true;dirty=false;
- try{const d=JSON.parse(JSON.stringify(S));await saveDoc.set(d);if(bakDoc&&better(d,cloudBest)){cloudBest=d;await bakDoc.set(d);}}catch(e){if(e&&e.code!=='unavailable')cloudDead=true;}
+ try{const d=JSON.parse(JSON.stringify(S));await saveDoc.set(d);if(bakDoc&&better(d,cloudBest)){cloudBest=d;await bakDoc.set(d);}if(FB&&d.tcode)FB.db.ref('transfer/'+d.tcode).set({s:d,t:Date.now()}).catch(()=>{});}catch(e){if(e&&e.code!=='unavailable')cloudDead=true;}
  saving=false;if(dirty)flush();}
 let _wc=null;function waitClaude(){if(!_wc)_wc=(async()=>{for(let i=0;i<30;i++){if(window.claude&&typeof window.claude.use==='function')return window.claude;await new Promise(r=>setTimeout(r,100));}return null;})();return _wc;}
 /* ================= Firebase（Claudeの外で使うとき） ================= */
@@ -351,6 +351,31 @@ async function initCloud(){
  }catch(e){}
 }
 
+/* ================= 引き継ぎコード ================= */
+const TC_ABC='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function genCode(){const a=new Uint32Array(12);(window.crypto||{getRandomValues:x=>{for(let i=0;i<x.length;i++)x[i]=Math.random()*1e9;return x;}}).getRandomValues(a);return Array.from(a,v=>TC_ABC[v%TC_ABC.length]).join('');}
+const fmtCode=c=>c.replace(/(.{4})(?=.)/g,'$1-');
+const cleanCode=c=>String(c||'').toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/[IO01]/g,m=>({I:'J',O:'Q','0':'Q','1':'J'}[m]));
+const hasFB=()=>!!(window.FIREBASE_CONFIG&&window.FIREBASE_CONFIG.apiKey);
+let tcFound=null;
+async function tcShow(){const fb=await fbInit();if(!fb){toast('インターネットにつながっていません');return;}
+ if(!S.tcode){S.tcode=genCode();}save();
+ try{await fb.db.ref('transfer/'+S.tcode).set({s:JSON.parse(JSON.stringify(S)),t:Date.now()});}catch(e){toast('コードを保存できませんでした');return;}
+ showModal('<div class="big">🔑</div><h2>引き継ぎコード</h2><div class="code" style="font-size:24px;letter-spacing:.08em;user-select:text;-webkit-user-select:text">'+fmtCode(S.tcode)+'</div>'
+  +'<p class="note">このコードをメモやスクショで残しておいてください。<br>データが消えたときや、別のスマホで遊ぶときに「コードで復元」すると続きから遊べます。<br>遊ぶたびに、このコードの中身も最新になります。<br><b>コードは人に教えないでください。</b></p>'
+  +'<div class="row" style="justify-content:center"><button class="gold" data-act="tcopy">コピー</button><button class="pri" data-act="close">とじる</button></div>');}
+async function tcFind(){const c=cleanCode($('tcin')&&$('tcin').value);if(c.length!==12){toast('12文字のコードを入れてください');return;}
+ const fb=await fbInit();if(!fb){toast('インターネットにつながっていません');return;}
+ let v=null;try{v=(await fb.db.ref('transfer/'+c).get()).val();}catch(e){}
+ if(!v||!v.s){toast('そのコードは見つかりませんでした');return;}
+ tcFound={c:c,s:v.s};const o=normalize(v.s);
+ showModal('<div class="big">📦</div><h2>このデータで復元しますか？</h2><div class="card"><div class="g"><b>'+esc(o.name||'名前なし')+'　'+RANKS[rankOf(o.xp)].n+'</b><small>経験値 '+o.xp+'　'+coinT(o.money)+'　モンスター '+Object.keys(o.mons).length+'匹</small></div></div>'
+  +'<p class="note">いまこのスマホで遊んでいるデータ（'+RANKS[rank()].n+'・経験値 '+S.xp+'）は、このデータに置きかわります。</p>'
+  +'<div class="row" style="justify-content:center"><button class="pri" data-act="tdo">復元する</button><button class="sub" data-act="close">やめる</button></div>');}
+async function tcRestore(){if(!tcFound)return;const n=normalize(tcFound.s);n.tcode=tcFound.c;S=n;S.ts=Date.now();tcFound=null;
+ try{localStorage.setItem('kc_save',JSON.stringify(S));localStorage.setItem('kc_bak',JSON.stringify(S));}catch(e){}
+ cloudBest=JSON.parse(JSON.stringify(S));try{if(saveDoc)await saveDoc.set(cloudBest);if(bakDoc)await bakDoc.set(cloudBest);}catch(e){}
+ applyRankUps(rank());hideModal();if(hasThree)buildDiorama();refreshAll();sfx('up');toast('復元しました！おかえりなさい');}
 /* ================= 育成の計算 ================= */
 const rankOf=xp=>{let r=0;for(let i=0;i<RANKS.length;i++)if(xp>=RANKS[i].xp)r=i;return r;};
 const rank=()=>rankOf(S.xp);
@@ -975,7 +1000,8 @@ function tabWork(){
  h+='<button class="pri" style="width:100%;padding:14px;margin-bottom:12px" data-act="solo">ひとりで開店！</button>';
  h+='<h3>友達と一緒に（オンライン協力）</h3><div class="card" style="flex-wrap:wrap"><button class="gold" data-act="mkroom">部屋を作る</button><span class="note">または</span><input id="code" inputmode="numeric" maxlength="4" placeholder="コード4桁" style="width:110px" value="'+esc(sel.code)+'"><button data-act="join">入る</button></div>';
  h+='<p class="note">同じコードを入れた人どうしが同じ厨房に入ります。給料と経験値は各自に入ります。</p>';
-  h+='<h3>あそびかた</h3><p class="note">①かごから ふしぎな食材をとる　②クリスタルナイフの切り株で切る／魔法陣で焼く（焼きすぎると焦げる）　③葉っぱのお皿にのせる　④🛎️の窓口に出す。<br>注文どおりに連続で出すとコンボで売上アップ。売上で★が決まり、給料と経験値がもらえます。</p>';
+  if(hasFB())h+='<h3>データ引き継ぎ</h3><div class="card" style="flex-wrap:wrap"><button class="gold" data-act="tshow">引き継ぎコードを表示</button>'+(S.tcode?'<span class="note">発行済み</span>':'')+'</div><div class="card" style="flex-wrap:wrap"><input id="tcin" maxlength="20" placeholder="XXXX-XXXX-XXXX" style="width:170px;text-transform:uppercase"><button data-act="tfind">コードで復元</button></div><p class="note">スマホを変えたときや、データが消えたときに使います。</p>';
+ h+='<h3>あそびかた</h3><p class="note">①かごから ふしぎな食材をとる　②クリスタルナイフの切り株で切る／魔法陣で焼く（焼きすぎると焦げる）　③葉っぱのお皿にのせる　④🛎️の窓口に出す。<br>注文どおりに連続で出すとコンボで売上アップ。売上で★が決まり、給料と経験値がもらえます。</p>';
  return h;
 }
 function stepsOf(code){const I=ING[code[0]],r=READY[code[0]];const a=[icon(code[0]+'0')+' '+I.n+'を かごからとる'];
@@ -1040,6 +1066,8 @@ document.addEventListener('click',e=>{
  else if(a==='tolobby'){G={ph:'lobby',sg:G.sg|0,r:G.r|0};showMenu();return;}
  else if(a==='quit'){if(Net.online)leaveRoom();else{G={ph:'lobby',sg:sel.stage,r:G.r|0};showMenu();}return;}
  else if(a==='close'){hideModal();}
+ else if(a==='tshow'){tcShow();return;}else if(a==='tfind'){tcFind();return;}else if(a==='tdo'){tcRestore();return;}
+ else if(a==='tcopy'){try{navigator.clipboard.writeText(fmtCode(S.tcode)).then(()=>toast('コピーしました'),()=>toast('長押しでコピーしてください'));}catch(e){toast('長押しでコピーしてください');}return;}
  else if(a==='book'){const mn=(STAGES[G.sg|0]||STAGES[0]).menu;showModal('<h2>📖 このお店のレシピ</h2><div style="text-align:left">'+mn.map(ri=>recipeCard(ri,true)).join('')+'</div><button class="pri" data-act="close">とじる</button><p class="note">'+(Net.online?'オンラインでは みんなの時間が止まらないので気をつけて！':'⏸ レシピを見ているあいだは 時間が止まります')+'</p>');view.book=true;return;}
  else if(a==='theme'){setTheme(id);}
  else if(a==='buysp'){if(spend(spCost())){S.spBought++;S.sp++;save();}}
